@@ -1,0 +1,31 @@
+# Datasets generados
+dataset/raw/
+dataset/processed/
+dataset/ventanas/
+
+# Capturas y resultados
+capturas/
+resultados/
+
+# Modelos entrenados
+modelos/*.joblib
+modelos/*.pkl
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+venv/
+.venv/
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Editores
+.vscode/
+.obsidian/workspace.json
+
+# Sistema
+.DS_Store
+Thumbs.db

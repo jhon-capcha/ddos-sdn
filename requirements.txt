@@ -1,0 +1,4 @@
+# VM-1 (plano de datos) no requiere librerias Python propias:
+# Mininet y Open vSwitch vienen instalados a nivel de sistema.
+# Las dependencias de ML y Ryu se congelan en VM-2 (Hito 2) con:
+#   pip freeze > requirements.txt
