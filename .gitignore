@@ -1,0 +1,28 @@
+# Entorno virtual (NO versionar)
+venv/
+.venv/
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Datos y modelos
+controller/datasets/
+controller/models/*.joblib
+controller/models/*.pkl
+controller/logs/
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Figuras generadas
+*.png
+
+# Editores y sistema
+.vscode/
+.obsidian/workspace.json
+.DS_Store
+Thumbs.db
