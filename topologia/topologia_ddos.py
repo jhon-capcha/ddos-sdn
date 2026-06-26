@@ -38,7 +38,7 @@ from mininet.log import setLogLevel, info, error
 # Seleccion de controlador:
 #   False -> controlador local de Mininet (validacion, Hito 1)
 #   True  -> controlador remoto Ryu en VM-2 (laboratorio, Hito 4)
-USE_REMOTE_CONTROLLER = False
+USE_REMOTE_CONTROLLER = True
 
 # Controlador remoto (Ryu en VM-2), usado cuando USE_REMOTE_CONTROLLER = True
 REMOTE_CONTROLLER_IP = "10.10.10.40"
