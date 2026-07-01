@@ -25,6 +25,7 @@ Universidad Nacional Mayor de San Marcos
 ===============================================================
 """
 
+import os
 from mininet.net import Mininet
 from mininet.node import Controller, RemoteController, OVSController, OVSSwitch
 from mininet.cli import CLI
@@ -39,6 +40,15 @@ from mininet.log import setLogLevel, info, error
 #   False -> controlador local de Mininet (validacion, Hito 1)
 #   True  -> controlador remoto Ryu en VM-2 (laboratorio, Hito 4)
 USE_REMOTE_CONTROLLER = True
+
+# Validacion automatica de conectividad al arrancar (pingAll).
+# Parametrizada por variable de entorno (default: False).
+# True  -> desarrollo: valida que la topologia y el switching funcionan.
+# False -> capturas oficiales: arranca sin pingAll para evitar
+#          trafico artificial previo al escenario experimental (Hito 5).
+VALIDATE_WITH_PINGALL = (
+    os.getenv("VALIDATE_WITH_PINGALL", "false").lower() == "true"
+)
 
 # Controlador remoto (Ryu en VM-2), usado cuando USE_REMOTE_CONTROLLER = True
 REMOTE_CONTROLLER_IP = "10.10.10.40"
@@ -153,8 +163,11 @@ def main() -> None:
         info("*** Iniciando la red\n")
         net.start()
 
-        info("*** Validando conectividad (pingAll)\n")
-        net.pingAll()
+        if VALIDATE_WITH_PINGALL:
+            info("*** Validando conectividad (pingAll)\n")
+            net.pingAll()
+        else:
+            info("*** Captura oficial: pingAll desactivado (sin trafico previo)\n")
 
         info("*** Abriendo CLI de Mininet (escribe 'exit' para salir)\n")
         CLI(net)
