@@ -9,7 +9,7 @@ __pycache__/
 *.so
 
 # Datos y modelos
-controller/datasets/
+controller/datasets/raw/*.csv
 controller/models/*.joblib
 controller/models/*.pkl
 controller/logs/

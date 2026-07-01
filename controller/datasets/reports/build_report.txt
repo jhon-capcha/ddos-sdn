@@ -1,0 +1,53 @@
+============================================================
+CONSOLIDACION DEL DATASET - HITO 5
+============================================================
+Fecha de generacion: 2026-06-30 20:12:49
+Directorio raw: /home/mininet/ddos-sdn/controller/datasets/raw
+
+[1] Verificando existencia de los CSV...
+    OK  normal.csv
+    OK  syn_flood.csv
+    OK  udp_flood.csv
+    OK  icmp_flood.csv
+    OK  coordinado.csv
+
+[2-4] Validando estructura y cargando...
+    OK  normal         372 filas, 17 columnas
+    OK  syn_flood      492 filas, 17 columnas
+    OK  udp_flood      492 filas, 17 columnas
+    OK  icmp_flood     492 filas, 17 columnas
+    OK  coordinado     732 filas, 17 columnas
+
+[5] Concatenando en orden experimental...
+    Orden: normal -> syn_flood -> udp_flood -> icmp_flood -> coordinado
+
+[6-7] Estadisticas del dataset consolidado
+------------------------------------------------------------
+Filas totales : 2580
+Columnas      : 17
+
+Filas por escenario:
+    normal         372  ( 14.4%)
+    syn_flood      492  ( 19.1%)
+    udp_flood      492  ( 19.1%)
+    icmp_flood     492  ( 19.1%)
+    coordinado     732  ( 28.4%)
+
+Distribucion de clases:
+    normal    2220  ( 86.0%)
+    ataque     360  ( 14.0%)
+
+Verificacion de columnas: OK
+Valores nulos totales   : 0
+Filas duplicadas exactas: 0
+------------------------------------------------------------
+
+[8] Guardando dataset consolidado...
+    -> /home/mininet/ddos-sdn/controller/datasets/processed/dataset_final.csv
+
+[9] Guardando reporte de auditoria...
+    -> /home/mininet/ddos-sdn/controller/datasets/reports/build_report.txt
+
+============================================================
+CONSOLIDACION COMPLETADA CORRECTAMENTE
+============================================================

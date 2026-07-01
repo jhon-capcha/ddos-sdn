@@ -24,6 +24,7 @@ Universidad Nacional Mayor de San Marcos
 ===============================================================
 """
 
+import csv
 import logging
 import os
 import time
@@ -66,6 +67,74 @@ LOGGER = logging.getLogger(__name__)
 
 
 # =====================================================
+# CONFIGURACION DEL DATASET (Hito 5)
+# =====================================================
+
+# Escenario experimental (parametrizado por variable de entorno).
+# El controlador NO cambia entre escenarios: solo cambia esta variable.
+VALID_SCENARIOS = {"normal", "syn_flood", "udp_flood", "icmp_flood", "coordinado"}
+SCENARIO = os.getenv("SCENARIO", "normal")
+
+# Fecha de captura opcional (para repetir experimentos sin sobrescribir).
+# Si se define, el CSV sera "<scenario>_<fecha>.csv"; si no, "<scenario>.csv".
+CAPTURE_DATE = os.getenv("CAPTURE_DATE", "")
+
+# Directorio del dataset crudo.
+DATASET_DIRECTORY = os.path.join(BASE_DIR, "datasets", "raw")
+
+# Etiquetas del dataset (constantes, evitan cadenas repetidas).
+LABEL_NORMAL = "normal"
+LABEL_ATTACK = "ataque"
+
+# Cabecera del CSV (17 columnas: crudo enriquecido + scenario + label).
+CSV_HEADER = [
+    "timestamp", "fecha", "scenario", "dpid",
+    "src_mac", "dst_mac", "src_ip", "dst_ip", "src_host", "dst_host",
+    "in_port", "out_port",
+    "packet_count", "byte_count", "duration_sec", "priority",
+    "label",
+]
+
+# =====================================================
+# INVENTARIO DE LA TOPOLOGIA (fuente unica de verdad)
+# =====================================================
+# Mapea cada MAC a su host, IP y rol. La MAC sigue el numero de host
+# (h5 -> ...05), pero la IP de los atacantes "salta" a .11/.12/.13
+# (diseno del Hito 1 para distinguir el rol por IP).
+HOST_INVENTORY = {
+    "00:00:00:00:00:01": {"host": "h1", "ip": "10.0.0.1",  "rol": "victima"},
+    "00:00:00:00:00:02": {"host": "h2", "ip": "10.0.0.2",  "rol": "normal"},
+    "00:00:00:00:00:03": {"host": "h3", "ip": "10.0.0.3",  "rol": "normal"},
+    "00:00:00:00:00:04": {"host": "h4", "ip": "10.0.0.4",  "rol": "normal"},
+    "00:00:00:00:00:05": {"host": "h5", "ip": "10.0.0.11", "rol": "atacante"},
+    "00:00:00:00:00:06": {"host": "h6", "ip": "10.0.0.12", "rol": "atacante"},
+    "00:00:00:00:00:07": {"host": "h7", "ip": "10.0.0.13", "rol": "atacante"},
+}
+
+
+def get_host_info(mac):
+    """Devuelve la info de inventario de una MAC, o None si no esta registrada."""
+    return HOST_INVENTORY.get(mac)
+
+
+def get_label(src_mac):
+    """
+    Etiqueta el flujo segun el ROL del host origen (Enfoque A).
+    La etiqueta pertenece al flujo, no al instante:
+        - origen con rol 'atacante' -> ataque
+        - origen 'normal' o 'victima' -> normal
+    """
+    info = get_host_info(src_mac)
+    if info is None:
+        # No deberia ocurrir: los flujos desconocidos se filtran antes
+        # de llegar aqui. Se devuelve normal por seguridad.
+        return LABEL_NORMAL
+    if info["rol"] == "atacante":
+        return LABEL_ATTACK
+    return LABEL_NORMAL
+
+
+# =====================================================
 # CLASE PRINCIPAL DEL CONTROLADOR
 # =====================================================
 
@@ -89,6 +158,9 @@ class Monitor13(app_manager.RyuApp):
 
         # Configurar el registro (consola + archivo)
         self._setup_logging()
+
+        # Validar el escenario y preparar el CSV del dataset (Hito 5)
+        self._setup_dataset()
 
         # Lanzar el hilo de monitoreo en paralelo
         self.monitor_thread = hub.spawn(self._monitor)
@@ -216,13 +288,18 @@ class Monitor13(app_manager.RyuApp):
 
     @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
     def _flow_stats_reply_handler(self, ev):
-        """Recibe las estadisticas de flujo y extrae los campos utiles."""
+        """
+        Recibe las estadisticas de flujo, las registra en el log y
+        escribe en el CSV los flujos pertenecientes a la topologia.
+        Los flujos con MAC desconocida se excluyen del dataset y se
+        cuentan para evaluar la calidad de la captura.
+        """
         body = ev.msg.body
         dpid = ev.msg.datapath.id
         timestamp = time.time()
         fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # Ordenar los flujos para que el log sea determinista
+        # Ordenar los flujos para que el registro sea determinista
         # (mismo orden en cada ejecucion -> comparaciones mas faciles).
         flujos = sorted(
             body,
@@ -238,20 +315,28 @@ class Monitor13(app_manager.RyuApp):
             if stat.priority == 0:
                 continue
 
-            # Extraer los campos del match (pueden no estar todos presentes).
+            # Extraer los campos del match.
             match = stat.match
             src_mac = match.get("eth_src", "")
             dst_mac = match.get("eth_dst", "")
             in_port = match.get("in_port", "")
 
             # Buscar la primera accion OUTPUT del flujo.
+            # Se utiliza una bandera para finalizar ambos bucles sin
+            # depender del valor del puerto de salida (por ejemplo, si
+            # en otra implementacion el puerto pudiera ser 0).
             out_port = ""
+            encontrado = False
             for inst in stat.instructions:
                 for action in getattr(inst, "actions", []):
                     if action.__class__.__name__ == "OFPActionOutput":
                         out_port = action.port
+                        encontrado = True
                         break
+                if encontrado:
+                    break
 
+            # Registro en el log (evidencia experimental, se mantiene).
             LOGGER.info(
                 "stats fecha=%s dpid=%s src=%s dst=%s in_port=%s out_port=%s "
                 "packets=%s bytes=%s duration=%ss priority=%s ts=%.0f",
@@ -259,6 +344,56 @@ class Monitor13(app_manager.RyuApp):
                 stat.packet_count, stat.byte_count,
                 stat.duration_sec, stat.priority, timestamp
             )
+
+            # Resolver el inventario para ambos extremos del flujo.
+            src_info = get_host_info(src_mac)
+            dst_info = get_host_info(dst_mac)
+
+            # Filtrar flujos con MAC desconocida: no entran al dataset.
+            if src_info is None or dst_info is None:
+                LOGGER.debug("Flujo ignorado (MAC desconocida): src=%s dst=%s",
+                             src_mac, dst_mac)
+                self.ignored_flows += 1
+                continue
+
+            # Construir y escribir la fila del dataset (17 columnas).
+            label = get_label(src_mac)
+            fila = [
+                "%.0f" % timestamp, fecha, SCENARIO, dpid,
+                src_mac, dst_mac,
+                src_info["ip"], dst_info["ip"],
+                src_info["host"], dst_info["host"],
+                in_port, out_port,
+                stat.packet_count, stat.byte_count,
+                stat.duration_sec, stat.priority,
+                label,
+            ]
+            self.csv_writer.writerow(fila)
+            self.registered_flows += 1
+            if label == LABEL_ATTACK:
+                self.count_attack += 1
+            else:
+                self.count_normal += 1
+
+        # Asegurar que las filas se escriban a disco en cada ciclo.
+        self.csv_file.flush()
+
+        # Resumen de calidad de la captura (acumulado, con porcentajes).
+        total = self.registered_flows
+        if total > 0:
+            pct_normal = 100.0 * self.count_normal / total
+            pct_attack = 100.0 * self.count_attack / total
+        else:
+            pct_normal = 0.0
+            pct_attack = 0.0
+        LOGGER.info(
+            "Dataset[%s]: registrados=%s normales=%s (%.1f%%) "
+            "ataque=%s (%.1f%%) ignorados=%s",
+            SCENARIO, total,
+            self.count_normal, pct_normal,
+            self.count_attack, pct_attack,
+            self.ignored_flows
+        )
 
     # =================================================
     # SECCION: REGISTRO (logging)
@@ -299,3 +434,47 @@ class Monitor13(app_manager.RyuApp):
 
         LOGGER.addHandler(file_handler)
         LOGGER.addHandler(console_handler)
+
+    def _setup_dataset(self):
+        """
+        Prepara el CSV del dataset para el escenario actual (Hito 5).
+        Valida SCENARIO, crea el directorio, abre el CSV y escribe la
+        cabecera una sola vez (si el archivo es nuevo).
+        """
+        # Validar el escenario (falla rapido y claro ante un typo).
+        if SCENARIO not in VALID_SCENARIOS:
+            LOGGER.error("Escenario no valido: '%s'. Validos: %s",
+                         SCENARIO, sorted(VALID_SCENARIOS))
+            raise ValueError("Escenario no valido: %s" % SCENARIO)
+
+        # Crear el directorio del dataset si no existe.
+        os.makedirs(DATASET_DIRECTORY, exist_ok=True)
+
+        # Nombre del CSV: "<scenario>.csv" o "<scenario>_<fecha>.csv".
+        if CAPTURE_DATE:
+            nombre = "%s_%s.csv" % (SCENARIO, CAPTURE_DATE)
+        else:
+            nombre = "%s.csv" % SCENARIO
+        self.csv_path = os.path.join(DATASET_DIRECTORY, nombre)
+
+        # Abrir el CSV en modo "append" y escribir la cabecera solo si es nuevo.
+        archivo_nuevo = not os.path.exists(self.csv_path)
+        self.csv_file = open(self.csv_path, "a", newline="")
+        
+        # lineterminator="\n" fuerza finales de linea Unix (LF), evitando
+        # el CRLF por defecto del modulo csv (que dificulta grep y otras
+        # herramientas de texto en Linux).
+        self.csv_writer = csv.writer(self.csv_file, lineterminator="\n")
+
+        if archivo_nuevo:
+            self.csv_writer.writerow(CSV_HEADER)
+            self.csv_file.flush()
+
+        # Contadores de calidad de captura.
+        self.registered_flows = 0
+        self.ignored_flows = 0
+        self.count_normal = 0
+        self.count_attack = 0
+
+        LOGGER.info("Dataset listo: escenario='%s', archivo='%s'",
+                    SCENARIO, self.csv_path)
