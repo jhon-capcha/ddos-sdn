@@ -1,0 +1,48 @@
+============================================================
+ENTRENAMIENTO Y EVALUACION DE MODELOS - HITO 7
+Evaluacion COMPLEMENTARIA (sin flow_count, 7 features)
+============================================================
+Fecha: 2026-07-02 00:49:18
+Entrada: /home/mininet/ddos-sdn/controller/datasets/processed/dataset_features.csv
+
+[1] Cargando dataset de features...
+    Muestras: 310 | Features: 7
+    Clases: ['ataque', 'normal'] (ataque=240, resto=70)
+    Features: packet_count_total, byte_count_total, packets_per_second, bytes_per_second, bytes_per_packet, entropy_src_ip, entropy_dst_ip
+
+[2] Validacion cruzada estratificada (5 folds)...
+    Decision Tree  acc=1.0000  prec=1.0000  rec=1.0000  F1=1.0000 (+-0.0000)
+    Random Forest  acc=1.0000  prec=1.0000  rec=1.0000  F1=1.0000 (+-0.0000)
+    SVM            acc=1.0000  prec=1.0000  rec=1.0000  F1=1.0000 (+-0.0000)
+    KNN            acc=1.0000  prec=1.0000  rec=1.0000  F1=1.0000 (+-0.0000)
+
+[3] Holdout 70/30 (matriz de confusion + tiempo)...
+    Decision Tree  tiempo=1.3633 us/muestra  cm=[[72, 0], [0, 21]]
+    Random Forest  tiempo=74.4415 us/muestra  cm=[[72, 0], [0, 21]]
+    SVM            tiempo=1.6581 us/muestra  cm=[[72, 0], [0, 21]]
+    KNN            tiempo=17.9674 us/muestra  cm=[[72, 0], [0, 21]]
+
+[4] Importancia de features (DT y RF)...
+    Decision Tree  top-3: entropy_dst_ip=1.000, entropy_src_ip=0.000, packet_count_total=0.000
+    Random Forest  top-3: packet_count_total=0.175, packets_per_second=0.170, byte_count_total=0.170
+
+[5] Importancia por permutacion (Random Forest, holdout)...
+    top-3: packet_count_total=0.0000, byte_count_total=0.0000, packets_per_second=0.0000
+    (nota: importancia baja = sustituibilidad por redundancia, no irrelevancia)
+
+[6] Exportando arbol de decision (PNG + TXT)...
+    -> decision_tree.png / decision_tree.txt
+
+[7] Comparativa de F1 entre modelos...
+    -> model_comparison_f1.png
+
+[8] Seleccion del mejor modelo...
+    Mejor modelo: Decision Tree (F1=1.0000, 1.3633 us/muestra)
+    -> model_sin_flowcount.joblib (reentrenado con todo el dataset)
+    -> feature_columns_sin_flowcount.json
+
+    -> resultados_modelos.csv
+
+============================================================
+ENTRENAMIENTO COMPLETADO
+============================================================
