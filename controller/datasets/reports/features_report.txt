@@ -1,0 +1,53 @@
+============================================================
+INGENIERIA DE CARACTERISTICAS - HITO 6
+============================================================
+Fecha de generacion: 2026-06-30 21:41:45
+Entrada: /home/mininet/ddos-sdn/controller/datasets/processed/dataset_final.csv
+Ventana: 5 s (MONITOR_INTERVAL)
+
+[1] Cargando y validando dataset crudo...
+    OK  2580 filas (flujos), 17 columnas
+
+[2] Calculando incrementos por flujo (diff + fillna)...
+    OK  delta_packets y delta_bytes calculados
+
+[3-6] Agregando por ventana (scenario, timestamp)...
+    OK  310 ventanas generadas
+
+[7] Auditoria del dataset de features
+------------------------------------------------------------
+Ventanas totales : 310
+Columnas         : 12
+
+Ventanas por escenario:
+    coordinado     62
+    icmp_flood     62
+    normal         62
+    syn_flood      62
+    udp_flood      62
+
+Distribucion de clases (por ventana):
+    normal     70  ( 22.6%)
+    ataque    240  ( 77.4%)
+
+Valores NaN en features : 0
+Valores Inf en features : 0
+
+Rango de las features:
+    flow_count           min=6.0000  max=12.0000  media=8.3226
+    packet_count_total   min=16.0000  max=16157.0000  media=5960.3871
+    byte_count_total     min=1512.0000  max=759134.0000  media=282156.3097
+    packets_per_second   min=3.2000  max=3231.4000  media=1192.0774
+    bytes_per_second     min=302.4000  max=151826.8000  media=56431.2619
+    bytes_per_packet     min=42.4770  max=98.0000  media=57.9428
+    entropy_src_ip       min=1.7925  max=2.2925  media=2.0098
+    entropy_dst_ip       min=1.7925  max=2.2925  media=2.0098
+------------------------------------------------------------
+
+[8] Exportando...
+    -> /home/mininet/ddos-sdn/controller/datasets/processed/dataset_features.csv
+    -> /home/mininet/ddos-sdn/controller/datasets/reports/features_report.txt
+
+============================================================
+INGENIERIA DE CARACTERISTICAS COMPLETADA
+============================================================

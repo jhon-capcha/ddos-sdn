@@ -1,0 +1,7 @@
+|--- entropy_dst_ip <= -0.70
+|   |--- class: normal
+|--- entropy_dst_ip >  -0.70
+|   |--- entropy_src_ip <= 0.84
+|   |   |--- class: ataque
+|   |--- entropy_src_ip >  0.84
+|   |   |--- class: ataque

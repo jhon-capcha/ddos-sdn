@@ -1,0 +1,10 @@
+[
+  "flow_count",
+  "packet_count_total",
+  "byte_count_total",
+  "packets_per_second",
+  "bytes_per_second",
+  "bytes_per_packet",
+  "entropy_src_ip",
+  "entropy_dst_ip"
+]

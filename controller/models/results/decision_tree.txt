@@ -1,0 +1,7 @@
+|--- flow_count <= -0.67
+|   |--- class: normal
+|--- flow_count >  -0.67
+|   |--- packet_count_total <= -0.64
+|   |   |--- class: ataque
+|   |--- packet_count_total >  -0.64
+|   |   |--- class: ataque

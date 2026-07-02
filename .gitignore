@@ -26,3 +26,9 @@ controller/logs/
 .obsidian/workspace.json
 .DS_Store
 Thumbs.db
+
+# Excepciones Hito 7: artefactos cientificos versionados de models/
+# (modelos serializados y figuras de resultados son entregables de la tesis)
+!controller/models/best_model.joblib
+!controller/models/results/*.png
+!controller/models/results_sin_flowcount/*.png

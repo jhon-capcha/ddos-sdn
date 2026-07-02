@@ -1,0 +1,5 @@
+modelo,accuracy,precision_macro,recall_macro,f1_ataque,f1_std,tiempo_us_muestra,holdout_TP,holdout_FP,holdout_FN,holdout_TN
+Decision Tree,1.0,1.0,1.0,1.0,0.0,1.3441,72,0,0,21
+Random Forest,1.0,1.0,1.0,1.0,0.0,74.3951,72,0,0,21
+SVM,1.0,1.0,1.0,1.0,0.0,1.7159,72,0,0,21
+KNN,1.0,1.0,1.0,1.0,0.0,18.4747,72,0,0,21
