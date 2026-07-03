@@ -1,7 +1,7 @@
 ============================================================
 INGENIERIA DE CARACTERISTICAS - HITO 6
 ============================================================
-Fecha de generacion: 2026-06-30 21:41:45
+Fecha de generacion: 2026-07-02 06:22:33
 Entrada: /home/mininet/ddos-sdn/controller/datasets/processed/dataset_final.csv
 Ventana: 5 s (MONITOR_INTERVAL)
 

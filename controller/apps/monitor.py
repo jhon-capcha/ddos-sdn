@@ -37,6 +37,14 @@ from ryu.controller.handler import set_ev_cls
 from ryu.ofproto import ofproto_v1_3
 from ryu.lib.packet import packet, ethernet, ether_types
 from ryu.lib import hub
+import sys
+
+# Importar el detector online (Hito 8). Se anade apps/ al path por si
+# ryu-manager se ejecuta desde otro directorio.
+_APPS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _APPS_DIR not in sys.path:
+    sys.path.insert(0, _APPS_DIR)
+from online_detector import OnlineFeatureBuilder, OnlineDetector
 
 # =====================================================
 # RUTAS DEL PROYECTO
@@ -94,6 +102,27 @@ CSV_HEADER = [
     "packet_count", "byte_count", "duration_sec", "priority",
     "label",
 ]
+
+# =====================================================
+# CONFIGURACION DEL DETECTOR (Hito 8)
+# =====================================================
+
+# Modo de operacion del controlador (parametrizado por variable de entorno):
+#   capture         -> solo captura dataset (comportamiento del Hito 5)
+#   detect          -> solo detecta en tiempo real (Hito 8)
+#   capture_detect  -> captura y detecta simultaneamente
+# Default 'capture': retrocompatible con el Hito 5 (nada se rompe).
+VALID_APP_MODES = {"capture", "detect", "capture_detect"}
+APP_MODE = os.getenv("APP_MODE", "capture")
+
+# Modelo operativo del detector: se usa el modelo SIN flow_count, porque
+# flow_count codifica la topologia del laboratorio (6/8/12 flujos), no la
+# fisica del ataque. El detector de produccion debe generalizar.
+MODELS_DIR = os.path.join(BASE_DIR, "models")
+MODEL_PATH = os.path.join(MODELS_DIR, "results_sin_flowcount",
+                          "model_sin_flowcount.joblib")
+FEATURE_COLUMNS_PATH = os.path.join(MODELS_DIR, "results_sin_flowcount",
+                                    "feature_columns_sin_flowcount.json")
 
 # =====================================================
 # INVENTARIO DE LA TOPOLOGIA (fuente unica de verdad)
@@ -159,14 +188,31 @@ class Monitor13(app_manager.RyuApp):
         # Configurar el registro (consola + archivo)
         self._setup_logging()
 
-        # Validar el escenario y preparar el CSV del dataset (Hito 5)
-        self._setup_dataset()
+        # Validar el modo de operacion (falla rapido ante un typo).
+        if APP_MODE not in VALID_APP_MODES:
+            LOGGER.error("APP_MODE no valido: '%s'. Validos: %s",
+                         APP_MODE, sorted(VALID_APP_MODES))
+            raise ValueError("APP_MODE no valido: %s" % APP_MODE)
+
+        # Banderas de subsistema segun el modo.
+        self.do_capture = APP_MODE in {"capture", "capture_detect"}
+        self.do_detect = APP_MODE in {"detect", "capture_detect"}
+
+        # Subsistema de captura (Hito 5): solo si el modo lo requiere.
+        # En modo 'detect' puro NO se valida SCENARIO ni se crea CSV.
+        if self.do_capture:
+            self._setup_dataset()
+
+        # Subsistema de deteccion (Hito 8): solo si el modo lo requiere.
+        if self.do_detect:
+            self._setup_detector()
 
         # Lanzar el hilo de monitoreo en paralelo
         self.monitor_thread = hub.spawn(self._monitor)
 
-        LOGGER.info("Monitor13 iniciado (OpenFlow 1.3, intervalo=%ss)",
-                    MONITOR_INTERVAL)
+        LOGGER.info("Monitor13 iniciado (OpenFlow 1.3, intervalo=%ss, modo=%s)",
+                    MONITOR_INTERVAL, APP_MODE)
+
 
     # =================================================
     # SECCION: SWITCH OPENFLOW 1.3 (learning switch)
@@ -298,6 +344,10 @@ class Monitor13(app_manager.RyuApp):
         dpid = ev.msg.datapath.id
         timestamp = time.time()
         fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Acumulador de flujos de la ventana para el detector (Hito 8).
+        # Se llena durante el bucle y se procesa al final si do_detect.
+        flows_online = []
 
         # Ordenar los flujos para que el registro sea determinista
         # (mismo orden en cada ejecucion -> comparaciones mas faciles).
@@ -349,12 +399,27 @@ class Monitor13(app_manager.RyuApp):
             src_info = get_host_info(src_mac)
             dst_info = get_host_info(dst_mac)
 
-            # Filtrar flujos con MAC desconocida: no entran al dataset.
+            # Filtrar flujos con MAC desconocida: no entran al dataset
+            # ni al detector (mismo criterio que el batch del Hito 5/6).
             if src_info is None or dst_info is None:
                 LOGGER.debug("Flujo ignorado (MAC desconocida): src=%s dst=%s",
                              src_mac, dst_mac)
-                self.ignored_flows += 1
+                if self.do_capture:
+                    self.ignored_flows += 1
                 continue
+
+            # Acumular el flujo para el detector (Hito 8). El flow_id usa
+            # los mismos campos que el batch (sin 'scenario'): la paridad
+            # de features esta garantizada por feature_engineering.
+            if self.do_detect:
+                flows_online.append({
+                    "flow_id": (dpid, src_mac, dst_mac,
+                                in_port, out_port, stat.priority),
+                    "packet_count": stat.packet_count,
+                    "byte_count": stat.byte_count,
+                    "src_ip": src_info["ip"],
+                    "dst_ip": dst_info["ip"],
+                })
 
             # Construir y escribir la fila del dataset (17 columnas).
             label = get_label(src_mac)
@@ -368,33 +433,96 @@ class Monitor13(app_manager.RyuApp):
                 stat.duration_sec, stat.priority,
                 label,
             ]
-            self.csv_writer.writerow(fila)
-            self.registered_flows += 1
-            if label == LABEL_ATTACK:
-                self.count_attack += 1
+            if self.do_capture:
+                self.csv_writer.writerow(fila)
+                self.registered_flows += 1
+                if label == LABEL_ATTACK:
+                    self.count_attack += 1
+                else:
+                    self.count_normal += 1
+
+        # --- Captura (Hito 5): escribir a disco y resumir ---
+        if self.do_capture:
+            # Asegurar que las filas se escriban a disco en cada ciclo.
+            self.csv_file.flush()
+
+            # Resumen de calidad de la captura (acumulado, con porcentajes).
+            total = self.registered_flows
+            if total > 0:
+                pct_normal = 100.0 * self.count_normal / total
+                pct_attack = 100.0 * self.count_attack / total
             else:
-                self.count_normal += 1
+                pct_normal = 0.0
+                pct_attack = 0.0
+            LOGGER.info(
+                "Dataset[%s]: registrados=%s normales=%s (%.1f%%) "
+                "ataque=%s (%.1f%%) ignorados=%s",
+                SCENARIO, total,
+                self.count_normal, pct_normal,
+                self.count_attack, pct_attack,
+                self.ignored_flows
+            )
 
-        # Asegurar que las filas se escriban a disco en cada ciclo.
-        self.csv_file.flush()
+        # --- Deteccion (Hito 8): clasificar la ventana ---
+        if self.do_detect:
+            self._classify_window(flows_online, timestamp)
 
-        # Resumen de calidad de la captura (acumulado, con porcentajes).
-        total = self.registered_flows
-        if total > 0:
-            pct_normal = 100.0 * self.count_normal / total
-            pct_attack = 100.0 * self.count_attack / total
+    # =================================================
+    # SECCION: DETECTOR EN TIEMPO REAL (Hito 8)
+    # =================================================
+
+    def _setup_detector(self):
+        """
+        Inicializa el detector en tiempo real (Hito 8): el constructor
+        de features incremental y el modelo de clasificacion.
+        """
+        self.feature_builder = OnlineFeatureBuilder()
+        self.detector = OnlineDetector(MODEL_PATH, FEATURE_COLUMNS_PATH)
+
+        # Contadores de deteccion (ventanas clasificadas).
+        self.win_normal = 0
+        self.win_attack = 0
+
+        LOGGER.info("Detector listo: modelo='%s' (%d features)",
+                    os.path.basename(MODEL_PATH),
+                    len(self.detector.feature_columns))
+
+    def _classify_window(self, flows_online, now):
+        """
+        Construye las features de la ventana actual y, si ya hay linea
+        base, clasifica y registra el resultado. 'flows_online' es la
+        lista de flujos de la ventana (dicts con flow_id, contadores, IPs).
+        """
+        feature_row = self.feature_builder.update(flows_online, now)
+
+        # Primer ciclo: solo se fija la linea base, no se clasifica.
+        if not self.feature_builder.ready:
+            LOGGER.info("Detector: warming up (fijando linea base)...")
+            return
+
+        pred = self.detector.predict(feature_row)
+        if pred == LABEL_ATTACK:
+            self.win_attack += 1
         else:
-            pct_normal = 0.0
-            pct_attack = 0.0
-        LOGGER.info(
-            "Dataset[%s]: registrados=%s normales=%s (%.1f%%) "
-            "ataque=%s (%.1f%%) ignorados=%s",
-            SCENARIO, total,
-            self.count_normal, pct_normal,
-            self.count_attack, pct_attack,
-            self.ignored_flows
-        )
+            self.win_normal += 1
 
+        # Log estructurado de la deteccion.
+        LOGGER.info(
+            "Deteccion: %s | pps=%.1f bps=%.1f entropy_src=%.4f "
+            "entropy_dst=%.4f flujos=%d | ventanas normal=%d ataque=%d",
+            pred.upper(),
+            feature_row["packets_per_second"],
+            feature_row["bytes_per_second"],
+            feature_row["entropy_src_ip"],
+            feature_row["entropy_dst_ip"],
+            feature_row["flow_count"],
+            self.win_normal, self.win_attack,
+        )
+        if pred == LABEL_ATTACK:
+            LOGGER.warning(
+                ">>> ATAQUE DDoS DETECTADO <<< pps=%.1f (ventana con %d flujos)",
+                feature_row["packets_per_second"], feature_row["flow_count"])
+    
     # =================================================
     # SECCION: REGISTRO (logging)
     # =================================================

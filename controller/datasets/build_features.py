@@ -22,12 +22,18 @@ Metodologia:
   - La etiqueta de la ventana es "ataque" si existe al menos un
     flujo de ataque en ella (any), si no "normal".
 
+REFACTOR (Hito 8): el calculo de las features (entropia, tasas,
+ensamblado del vector) se delega en feature_engineering.py, el
+modulo compartido con el detector en linea (monitor.py). Esto
+GARANTIZA LA PARIDAD entre el entrenamiento (este batch) y la
+inferencia en tiempo real. La logica de este script (carga,
+diff por flujo, agregacion, auditoria, export) no cambia.
+
 Pipeline:
     1. Cargar y validar dataset_final.csv (17 columnas).
     2. Calcular delta_packets y delta_bytes por flujo (diff+fillna).
     3. Agrupar por ventana (scenario, timestamp).
-    4. Features de volumen y tasa (sobre incrementos).
-    5. Entropia de Shannon (IP origen y destino).
+    4-5. Features de volumen, tasa y entropia (feature_engineering).
     6. Etiqueta de ventana (any ataque).
     7. Auditoria (sin NaN/Inf, distribucion de clases).
     8. Exportar dataset_features.csv + reporte.
@@ -46,6 +52,8 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
+import feature_engineering as fe
+
 
 # =====================================================
 # CONFIGURACION
@@ -59,8 +67,8 @@ INPUT_CSV = os.path.join(PROCESSED_DIR, "dataset_final.csv")
 OUTPUT_CSV = os.path.join(PROCESSED_DIR, "dataset_features.csv")
 REPORT_TXT = os.path.join(REPORTS_DIR, "features_report.txt")
 
-# Intervalo de monitoreo del controlador (segundos). Define la ventana.
-MONITOR_INTERVAL = 5.0
+# Intervalo de monitoreo (definido en el modulo compartido, unica fuente).
+MONITOR_INTERVAL = fe.MONITOR_INTERVAL
 
 # Etiquetas.
 LABEL_NORMAL = "normal"
@@ -84,12 +92,8 @@ FLOW_ID_COLS = [
 ]
 
 # Columnas del dataset de features (12: 3 metadatos + 8 features + label).
-FEATURE_COLUMNS = [
-    "flow_count",
-    "packet_count_total", "byte_count_total",
-    "packets_per_second", "bytes_per_second", "bytes_per_packet",
-    "entropy_src_ip", "entropy_dst_ip",
-]
+# Las 8 features vienen del modulo compartido (orden canonico).
+FEATURE_COLUMNS = fe.FEATURE_COLUMNS_FULL
 OUTPUT_COLUMNS = ["timestamp", "fecha", "scenario"] + FEATURE_COLUMNS + ["label"]
 
 
@@ -120,32 +124,6 @@ def abortar(reporter, mensaje):
     except Exception:
         pass
     sys.exit(1)
-
-
-# =====================================================
-# ENTROPIA DE SHANNON
-# =====================================================
-
-def shannon_entropy(series):
-    """
-    Entropia de Shannon (base 2) sobre la distribucion de FRECUENCIAS
-    de los valores de una serie (p. ej. IPs de una ventana).
-
-        H = - sum_i  p_i * log2(p_i)
-
-    donde p_i es la proporcion de flujos con la IP i en la ventana.
-    NO se pondera por packet_count: se mide la dispersion de fuentes.
-
-    - Una sola IP  -> H = 0 (concentracion total).
-    - IPs uniformes -> H maxima (log2 del numero de IPs distintas).
-    """
-    conteos = series.value_counts()
-    total = conteos.sum()
-    if total == 0:
-        return 0.0
-    p = conteos / total
-    # Solo p > 0 contribuyen (0*log0 = 0 por convencion).
-    return float(-(p * np.log2(p)).sum())
 
 
 # =====================================================
@@ -213,39 +191,24 @@ def main():
         # Metadato: fecha legible (la de cualquier flujo de la ventana).
         fecha = g["fecha"].iloc[0]
 
-        # Volumen (sobre incrementos).
-        flow_count = len(g)
-        sum_dp = float(g["delta_packets"].sum())
-        sum_db = float(g["delta_bytes"].sum())
-
-        # Tasas de la ventana.
-        pps = sum_dp / MONITOR_INTERVAL
-        bps = sum_db / MONITOR_INTERVAL
-        # Proteger la division (ventana sin trafico nuevo -> 0).
-        bpp = sum_db / max(sum_dp, 1.0)
-
-        # Entropia de Shannon sobre la distribucion de flujos por IP.
-        h_src = shannon_entropy(g["src_ip"])
-        h_dst = shannon_entropy(g["dst_ip"])
+        # Features de la ventana: calculadas por el modulo COMPARTIDO
+        # (misma logica que el detector en linea -> paridad garantizada).
+        feature_row = fe.build_feature_row(
+            flow_count=len(g),
+            sum_delta_packets=float(g["delta_packets"].sum()),
+            sum_delta_bytes=float(g["delta_bytes"].sum()),
+            src_ips=g["src_ip"],
+            dst_ips=g["dst_ip"],
+        )
 
         # Etiqueta de la ventana: ataque si hay al menos un flujo de ataque.
         label = LABEL_ATTACK if (g["label"] == LABEL_ATTACK).any() \
             else LABEL_NORMAL
 
-        filas.append({
-            "timestamp": timestamp,
-            "fecha": fecha,
-            "scenario": scenario,
-            "flow_count": flow_count,
-            "packet_count_total": int(sum_dp),
-            "byte_count_total": int(sum_db),
-            "packets_per_second": round(pps, 4),
-            "bytes_per_second": round(bps, 4),
-            "bytes_per_packet": round(bpp, 4),
-            "entropy_src_ip": round(h_src, 6),
-            "entropy_dst_ip": round(h_dst, 6),
-            "label": label,
-        })
+        fila = {"timestamp": timestamp, "fecha": fecha, "scenario": scenario}
+        fila.update(feature_row)
+        fila["label"] = label
+        filas.append(fila)
 
     features = pd.DataFrame(filas, columns=OUTPUT_COLUMNS)
     reporter.add("    OK  %d ventanas generadas" % len(features))
