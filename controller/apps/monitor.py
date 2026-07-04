@@ -46,6 +46,9 @@ if _APPS_DIR not in sys.path:
     sys.path.insert(0, _APPS_DIR)
 from online_detector import OnlineFeatureBuilder, OnlineDetector
 
+from attack_identifier import AttackIdentifier
+from mitigator import Mitigator
+
 # =====================================================
 # RUTAS DEL PROYECTO
 # =====================================================
@@ -112,7 +115,8 @@ CSV_HEADER = [
 #   detect          -> solo detecta en tiempo real (Hito 8)
 #   capture_detect  -> captura y detecta simultaneamente
 # Default 'capture': retrocompatible con el Hito 5 (nada se rompe).
-VALID_APP_MODES = {"capture", "detect", "capture_detect"}
+VALID_APP_MODES = {"capture", "detect", "capture_detect",
+                   "detect_mitigate", "capture_detect_mitigate"}
 APP_MODE = os.getenv("APP_MODE", "capture")
 
 # Modelo operativo del detector: se usa el modelo SIN flow_count, porque
@@ -195,8 +199,13 @@ class Monitor13(app_manager.RyuApp):
             raise ValueError("APP_MODE no valido: %s" % APP_MODE)
 
         # Banderas de subsistema segun el modo.
-        self.do_capture = APP_MODE in {"capture", "capture_detect"}
-        self.do_detect = APP_MODE in {"detect", "capture_detect"}
+        self.do_capture = APP_MODE in {"capture", "capture_detect",
+                                       "capture_detect_mitigate"}
+        self.do_detect = APP_MODE in {"detect", "capture_detect",
+                                      "detect_mitigate",
+                                      "capture_detect_mitigate"}
+        self.do_mitigate = APP_MODE in {"detect_mitigate",
+                                        "capture_detect_mitigate"}
 
         # Subsistema de captura (Hito 5): solo si el modo lo requiere.
         # En modo 'detect' puro NO se valida SCENARIO ni se crea CSV.
@@ -465,7 +474,52 @@ class Monitor13(app_manager.RyuApp):
 
         # --- Deteccion (Hito 8): clasificar la ventana ---
         if self.do_detect:
-            self._classify_window(flows_online, timestamp)
+            self._classify_window(flows_online, timestamp,
+                                  ev.msg.datapath)
+    
+
+    # =================================================
+    # SECCION: EXPIRACION DE REGLAS (Hito 9)
+    # =================================================
+
+    @set_ev_cls(ofp_event.EventOFPFlowRemoved, MAIN_DISPATCHER)
+    def _flow_removed_handler(self, ev):
+        """
+        Se dispara cuando el switch elimina una regla y notifica al
+        controlador (flag OFPFF_SEND_FLOW_REM). Sincroniza el registro
+        del mitigador: al expirar una regla DROP (ataque cesado), la
+        quita de installed_rules para que pueda reinstalarse si el
+        ataque reaparece. El switch es la fuente de verdad del estado.
+        """
+        # Solo relevante en modo mitigacion.
+        if not self.do_mitigate:
+            return
+
+        msg = ev.msg
+        match = msg.match
+
+        # Extraer IPs del match (solo las reglas de mitigacion las tienen).
+        src_ip = match.get("ipv4_src")
+        dst_ip = match.get("ipv4_dst")
+        if not src_ip or not dst_ip:
+            # No es una regla de mitigacion (p. ej. una del learning
+            # switch por MAC): se ignora.
+            return
+
+        # Motivo de la expiracion (para trazabilidad).
+        ofproto = msg.datapath.ofproto
+        if msg.reason == ofproto.OFPRR_IDLE_TIMEOUT:
+            motivo = "idle_timeout"
+        elif msg.reason == ofproto.OFPRR_HARD_TIMEOUT:
+            motivo = "hard_timeout"
+        elif msg.reason == ofproto.OFPRR_DELETE:
+            motivo = "delete"
+        else:
+            motivo = "otro(%s)" % msg.reason
+
+        LOGGER.info("FlowRemoved: regla %s -> %s eliminada (motivo=%s)",
+                    src_ip, dst_ip, motivo)
+        self.mitigator.clear_rule(src_ip, dst_ip)
 
     # =================================================
     # SECCION: DETECTOR EN TIEMPO REAL (Hito 8)
@@ -478,33 +532,46 @@ class Monitor13(app_manager.RyuApp):
         """
         self.feature_builder = OnlineFeatureBuilder()
         self.detector = OnlineDetector(MODEL_PATH, FEATURE_COLUMNS_PATH)
-
         # Contadores de deteccion (ventanas clasificadas).
         self.win_normal = 0
         self.win_attack = 0
+
+        # Subsistema de mitigacion (Hito 9): identificador + mitigador.
+        # Solo se activa en los modos *_mitigate.
+        self.consecutive_attack_windows = 0
+        if self.do_mitigate:
+            self.identifier = AttackIdentifier()
+            self.mitigator = Mitigator(logger=LOGGER)
+            LOGGER.info("Mitigacion ACTIVA: victima=%s, pps_min=%.0f, "
+                        "confirmacion=2 ventanas",
+                        self.identifier.victim_ip, self.identifier.pps_min)       
 
         LOGGER.info("Detector listo: modelo='%s' (%d features)",
                     os.path.basename(MODEL_PATH),
                     len(self.detector.feature_columns))
 
-    def _classify_window(self, flows_online, now):
+    def _classify_window(self, flows_online, now, datapath):
         """
         Construye las features de la ventana actual y, si ya hay linea
         base, clasifica y registra el resultado. 'flows_online' es la
         lista de flujos de la ventana (dicts con flow_id, contadores, IPs).
+        En modo mitigacion, tras confirmar 2 ventanas consecutivas de
+        ataque, identifica el origen e instala reglas DROP.
         """
         feature_row = self.feature_builder.update(flows_online, now)
-
         # Primer ciclo: solo se fija la linea base, no se clasifica.
         if not self.feature_builder.ready:
             LOGGER.info("Detector: warming up (fijando linea base)...")
             return
-
         pred = self.detector.predict(feature_row)
         if pred == LABEL_ATTACK:
             self.win_attack += 1
+            self.consecutive_attack_windows += 1
         else:
             self.win_normal += 1
+            # Racha rota: una ventana normal reinicia el contador.
+            self.consecutive_attack_windows = 0
+    
 
         # Log estructurado de la deteccion.
         LOGGER.info(
@@ -522,6 +589,19 @@ class Monitor13(app_manager.RyuApp):
             LOGGER.warning(
                 ">>> ATAQUE DDoS DETECTADO <<< pps=%.1f (ventana con %d flujos)",
                 feature_row["packets_per_second"], feature_row["flow_count"])
+                
+        # --- Mitigacion (Hito 9): tras confirmar 2 ventanas seguidas ---
+        if self.do_mitigate and self.consecutive_attack_windows >= 2:
+            atacantes = self.identifier.identify(
+                self.feature_builder.last_flow_deltas)
+            if atacantes:
+                nuevos = self.mitigator.mitigate(datapath, atacantes)
+                if not nuevos:
+                    LOGGER.info("Mitigacion: reglas ya activas para los "
+                                "atacantes identificados (sin cambios).")
+            else:
+                LOGGER.info("Mitigacion: ventana de ataque pero ningun flujo "
+                            "supera el criterio de identificacion.")
     
     # =================================================
     # SECCION: REGISTRO (logging)

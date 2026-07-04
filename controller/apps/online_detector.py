@@ -6,33 +6,27 @@
 online_detector.py
 ===============================================================
 
-Inteligencia del detector DDoS en tiempo real (Hito 8).
+Inteligencia del detector DDoS en tiempo real.
 
-Contiene dos clases con responsabilidad unica cada una:
-
+Clases:
   - OnlineFeatureBuilder: convierte las estadisticas de flujo
-    (FlowStats) de cada ciclo de monitoreo en un vector de
-    features, manteniendo el estado incremental (los contadores
-    de la ventana anterior) para calcular los Delta. Es
-    DETERMINISTA: mismas fotografias -> mismo feature_row.
+    (FlowStats) de cada ciclo en un vector de features, manteniendo
+    el estado incremental para calcular los Delta. DETERMINISTA.
+    Ademas expone last_flow_deltas (estado publico de solo lectura
+    de la ultima ventana) para el identificador de atacantes (Hito 9).
+  - OnlineDetector: carga el modelo y su contrato de features, y
+    clasifica un feature_row en NORMAL / ATAQUE.
 
-  - OnlineDetector: carga el modelo serializado y su contrato de
-    features (feature_columns.json), y clasifica un feature_row
-    en NORMAL / ATAQUE.
+Paridad: el calculo de features se delega en feature_engineering.py,
+el mismo modulo que usa build_features.py (batch). El Delta se calcula
+aqui (contra el estado guardado), pero las features finales las produce
+el modulo compartido. last_flow_deltas NO interviene en el feature_row
+(paridad verificada: anadir el estado publico no altera el calculo).
 
-Paridad: el calculo de las features se delega en
-feature_engineering.py, el MISMO modulo que usa build_features.py
-(batch). Asi las features online son identicas a las de
-entrenamiento. El Delta se calcula aqui (contra el estado
-guardado), pero las features finales las produce el modulo
-compartido.
-
-Linea base (baseline): el detector empieza a clasificar desde el
-SEGUNDO ciclo. El primer ciclo solo fija la linea base de los
-contadores OpenFlow, porque en el primer poll los flujos pueden
-llevar tiempo activos y su contador acumulado no representa el
-intervalo de 5 s. Solo el incremento entre dos fotografias
-consecutivas es comparable con las features de entrenamiento.
+Linea base (baseline): el detector clasifica desde el SEGUNDO ciclo.
+El primer ciclo solo fija la linea base de los contadores, porque en
+el primer poll los flujos pueden llevar tiempo activos y su contador
+acumulado no representa el intervalo de 5 s.
 
 Maestria en Ciberseguridad - UNMSM
 ===============================================================
@@ -69,38 +63,36 @@ FLOW_TIMEOUT = 30.0
 
 class OnlineFeatureBuilder:
     """
-    Mantiene el estado de los contadores por flujo entre ciclos de
-    monitoreo y produce, en cada ciclo, el vector de las 8 features
-    de la ventana actual.
+    Mantiene el estado de los contadores por flujo entre ciclos y
+    produce, en cada ciclo, el vector de las 8 features de la ventana.
 
     Contrato:
         feature_row = builder.update(flows, now)
         - SIEMPRE devuelve un feature_row (nunca None).
-        - builder.ready indica si ya existe una linea base valida
-          (es decir, si el feature_row es utilizable para clasificar).
+        - builder.ready indica si ya existe linea base valida.
+        - builder.last_flow_deltas expone los flujos de la ultima
+          ventana con su Delta y contribucion (para el Hito 9).
         - No conoce el modelo ML ni toma decisiones operacionales.
 
     flow_id = (dpid, src_mac, dst_mac, in_port, out_port, priority)
-    (los mismos campos que el batch, sin 'scenario' que no existe en
-    una sesion continua del controlador).
     """
 
     def __init__(self, flow_timeout=FLOW_TIMEOUT):
         # Estado por flujo: contadores de la ultima fotografia + last_seen.
         self.flow_state = {}
         self.flow_timeout = flow_timeout
-        # Cuenta cuantos ciclos se han procesado. La linea base existe
-        # cuando ya hubo AL MENOS un ciclo previo (el actual puede
-        # calcular Delta contra la fotografia anterior).
+        # Cuenta de ciclos procesados (para la logica de 'ready').
         self._cycles = 0
+        # Estado publico de solo lectura: los flujos de la ULTIMA ventana
+        # con su Delta y contribucion. Lo consume attack_identifier.py
+        # (Hito 9). NO afecta al calculo del feature_row (paridad intacta).
+        self.last_flow_deltas = []
 
     @property
     def ready(self):
         """
-        True si ya existe una linea base valida: hace falta haber
-        procesado al menos un ciclo previo, de modo que el ciclo actual
-        pueda calcular Delta contra una fotografia anterior. Es decir,
-        ready es True a partir del SEGUNDO ciclo.
+        True desde el SEGUNDO ciclo: hace falta una fotografia previa
+        contra la cual calcular Delta.
         """
         return self._cycles >= 2
 
@@ -109,17 +101,19 @@ class OnlineFeatureBuilder:
         Procesa las estadisticas de flujo de un ciclo.
 
         Parametros:
-            flows : lista de dicts, cada uno con las claves:
-                    flow_id (tupla), packet_count, byte_count,
-                    src_ip, dst_ip
-            now   : marca de tiempo del ciclo (segundos)
+            flows : lista de dicts con las claves flow_id, packet_count,
+                    byte_count, src_ip, dst_ip (y opcionalmente src_mac,
+                    dst_mac).
+            now   : marca de tiempo del ciclo (segundos).
 
         Devuelve el feature_row (dict de 8 features) de la ventana.
+        Efecto lateral: actualiza self.last_flow_deltas.
         """
         sum_dp = 0.0
         sum_db = 0.0
         src_ips = []
         dst_ips = []
+        deltas_ventana = []
 
         for f in flows:
             fid = f["flow_id"]
@@ -128,9 +122,9 @@ class OnlineFeatureBuilder:
 
             prev = self.flow_state.get(fid)
             if prev is None:
-                # Flujo sin linea base: no inventamos su tasa desde el
-                # nacimiento (el acumulado no representa el intervalo).
-                # Delta = 0 en este ciclo; desde el proximo tendra base.
+                # Flujo sin linea base: Delta = 0 en este ciclo (el
+                # acumulado no representa el intervalo). Desde el proximo
+                # ciclo tendra base y su Delta sera real.
                 dp = 0.0
                 db = 0.0
             else:
@@ -145,10 +139,25 @@ class OnlineFeatureBuilder:
 
             sum_dp += dp
             sum_db += db
-            # Cada flujo contribuye una vez a la distribucion de IPs
-            # (frecuencia de flujos por IP, igual que el batch).
+            # Cada flujo contribuye una vez a la distribucion de IPs.
             src_ips.append(f["src_ip"])
             dst_ips.append(f["dst_ip"])
+
+            # Registrar el Delta de este flujo (para el identificador del
+            # Hito 9). La contribucion se completa tras el bucle, cuando
+            # ya se conoce el total. Esto NO interviene en el feature_row.
+            deltas_ventana.append({
+                "flow_id": fid,
+                "src_mac": f.get("src_mac", ""),
+                "dst_mac": f.get("dst_mac", ""),
+                "src_ip": f["src_ip"],
+                "dst_ip": f["dst_ip"],
+                "delta_packets": dp,
+                "delta_bytes": db,
+                "pps": dp / fe.MONITOR_INTERVAL,
+                "bps": db / fe.MONITOR_INTERVAL,
+                "contribution": 0.0,
+            })
 
             # Actualizar el estado del flujo.
             self.flow_state[fid] = {
@@ -157,8 +166,15 @@ class OnlineFeatureBuilder:
                 "last_seen": now,
             }
 
-        flow_count = len(flows)
+        # Completar la contribucion de cada flujo reutilizando el MISMO
+        # sum_dp del feature_row (cero duplicacion del total).
+        for d in deltas_ventana:
+            d["contribution"] = (d["delta_packets"] / sum_dp
+                                 if sum_dp > 0 else 0.0)
+        # Publicar el estado de la ventana (solo lectura para el Hito 9).
+        self.last_flow_deltas = deltas_ventana
 
+        flow_count = len(flows)
         # Features de la ventana: calculadas por el modulo COMPARTIDO
         # (paridad con build_features.py garantizada).
         feature_row = fe.build_feature_row(
@@ -169,11 +185,9 @@ class OnlineFeatureBuilder:
             dst_ips=dst_ips,
         )
 
-        # Purga de flujos inactivos (higiene de memoria; uso intensivo
-        # en el Hito 9 para identificar atacantes activos).
+        # Purga de flujos inactivos (higiene de memoria).
         self._cleanup(now)
-
-        # Registrar que se proceso un ciclo (para la logica de 'ready').
+        # Registrar que se proceso un ciclo.
         self._cycles += 1
 
         return feature_row
@@ -193,10 +207,8 @@ class OnlineFeatureBuilder:
 class OnlineDetector:
     """
     Carga el modelo serializado y su contrato de features, y clasifica
-    un feature_row en NORMAL / ATAQUE.
-
-    El modelo es un Pipeline completo (StandardScaler + clasificador),
-    asi que el escalado se aplica automaticamente en predict().
+    un feature_row en NORMAL / ATAQUE. El modelo es un Pipeline completo
+    (StandardScaler + clasificador); el escalado se aplica en predict().
     """
 
     def __init__(self, model_path, feature_columns_path):
@@ -211,22 +223,15 @@ class OnlineDetector:
 
     def predict(self, feature_row):
         """
-        Clasifica un feature_row. Devuelve la etiqueta predicha
-        ("normal" / "ataque").
-
-        Construye el vector en el orden EXACTO del contrato y valida
-        la longitud (evita errores silenciosos de orden/numero).
+        Clasifica un feature_row. Devuelve "normal" / "ataque".
+        Construye el vector en el orden EXACTO del contrato.
         """
         vector = fe.feature_row_to_vector(feature_row, self.feature_columns)
         pred = self.model.predict([vector])
         return pred[0]
 
     def predict_proba(self, feature_row):
-        """
-        Devuelve la probabilidad de la clase predicha, si el modelo la
-        soporta; en caso contrario None. (Un arbol sobre datos
-        separables suele dar 1.0, poco informativo.)
-        """
+        """Probabilidad de la clase predicha, si el modelo la soporta."""
         if not hasattr(self.model, "predict_proba"):
             return None
         vector = fe.feature_row_to_vector(feature_row, self.feature_columns)
