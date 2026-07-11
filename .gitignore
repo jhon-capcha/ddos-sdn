@@ -1,34 +1,47 @@
-# Entorno virtual (NO versionar)
+cd D:\SDN\ddos-sdn-control
+@'
+# ===== Entornos virtuales (NO versionar) =====
 venv/
 .venv/
 .env
 
-# Python
+# ===== Python =====
 __pycache__/
 *.py[cod]
 *.so
 
-# Datos y modelos
-controller/datasets/raw/*.csv
-controller/models/*.joblib
-controller/models/*.pkl
+# ===== Logs y temporales =====
 controller/logs/
 *.log
+*.pcap
+*.csv.tmp
+/tmp/
 
-# Jupyter
+# ===== Jupyter =====
 .ipynb_checkpoints/
 
-# Figuras generadas
-*.png
-
-# Editores y sistema
+# ===== Editores y sistema operativo =====
 .vscode/
+.idea/
 .obsidian/workspace.json
 .DS_Store
 Thumbs.db
 
-# Excepciones Hito 7: artefactos cientificos versionados de models/
-# (modelos serializados y figuras de resultados son entregables de la tesis)
+# ===== Figuras generadas temporalmente (raíz) =====
+# Se ignoran PNGs sueltos en la raíz, pero se VERSIONAN los de docs/ y paper/
+/*.png
+
+# ===== Datasets crudos y modelos temporales =====
+controller/datasets/raw/*.csv
+controller/models/*.joblib
+controller/models/*.pkl
+
+# ===== Excepciones: artefactos científicos versionados =====
+# (modelos, figuras de resultados y diagramas son entregables de la tesis)
 !controller/models/best_model.joblib
 !controller/models/results/*.png
 !controller/models/results_sin_flowcount/*.png
+'@ | Set-Content -Encoding UTF8 .gitignore
+
+Write-Host "=== .gitignore actualizado ===" -ForegroundColor Cyan
+Get-Content .gitignore
