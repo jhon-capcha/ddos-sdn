@@ -9,7 +9,7 @@
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 ![Status](https://img.shields.io/badge/Status-Stable-brightgreen)
 
-## Sistema de detección, identificación del origen y mitigación automática de ataques DDoS en redes SDN mediante Entropía de Shannon y Machine Learning
+## Detección y mitigación de ataques DDoS en redes SDN mediante Entropía de Shannon y Machine Learning
 
 > Proyecto desarrollado en la **Maestría en Ciberseguridad** de la **Universidad Nacional Mayor de San Marcos (UNMSM)**.
 
@@ -47,16 +47,19 @@ La solución incorpora métricas basadas en la **Entropía de Shannon**, caracte
 
 ## 1. Descripción del proyecto
 
-Los ataques de denegación de servicio distribuido (DDoS) siguen siendo una de las amenazas más frecuentes contra la disponibilidad de los servicios en red. Las redes definidas por software (SDN) ofrecen una oportunidad única para defenderse de estos ataques: al centralizar la lógica de control en un controlador programable, es posible observar el estado global de la red e instalar contramedidas de forma dinámica.
+Los ataques de denegación de servicio distribuido (DDoS) representan una de las principales amenazas para la disponibilidad de los servicios en redes modernas. En las redes definidas por software (*Software Defined Networking*, SDN), la separación entre el plano de control y el plano de datos permite implementar mecanismos inteligentes de monitoreo, análisis y respuesta desde un controlador centralizado.
 
-Este proyecto construye, de extremo a extremo, un sistema defensivo que:
+Este proyecto presenta un sistema para la **detección y mitigación automática de ataques DDoS en redes SDN**, cuya estrategia de caracterización del tráfico se fundamenta en la **Entropía de Shannon** como principal indicador del comportamiento de la red. Sobre esta caracterización se incorpora un modelo de **Machine Learning**, encargado de clasificar el tráfico y apoyar la toma de decisiones para la respuesta automática.
 
-- **Detecta** ataques DDoS en tiempo real analizando estadísticas de flujo recolectadas vía OpenFlow.
-- **Identifica** automáticamente el origen del ataque (los hosts atacantes), incluso en escenarios coordinados con múltiples orígenes simultáneos.
-- **Mitiga** el ataque instalando reglas FlowMod DROP dirigidas exclusivamente al tráfico malicioso, preservando el tráfico legítimo.
-- **Se recupera** automáticamente al cesar el ataque, mediante un ciclo de vida de reglas basado en `idle_timeout` y el evento `FlowRemoved`.
+El sistema implementado es capaz de:
 
-El sistema fue validado mediante una campaña experimental de 15 experimentos (5 escenarios × 3 repeticiones) con resultados reproducibles y estadísticamente sólidos.
+- **Caracterizar** el comportamiento del tráfico mediante métricas basadas en la Entropía de Shannon y estadísticas obtenidas desde OpenFlow.
+- **Detectar** ataques DDoS en tiempo real mediante un modelo de Machine Learning entrenado con tráfico normal y malicioso.
+- **Identificar** automáticamente el origen del ataque, incluso en escenarios con múltiples atacantes simultáneos.
+- **Mitigar** el tráfico malicioso mediante la instalación dinámica de reglas OpenFlow **DROP**, preservando la disponibilidad del tráfico legítimo.
+- **Recuperar** automáticamente el estado normal de la red mediante la expiración controlada de las reglas de mitigación y el procesamiento del evento `FlowRemoved`.
+
+El sistema fue implementado y validado experimentalmente sobre un laboratorio SDN reproducible basado en Mininet, Open vSwitch y el controlador Ryu, demostrando una respuesta eficaz frente a distintos escenarios de ataque DDoS.
 
 ---
 
@@ -124,7 +127,9 @@ Topología en estrella con un switch OpenFlow (s1) y 7 hosts:
 | Host | Rol | IP |
 |---|---|---|
 | h1 | Víctima | 10.0.0.1 |
-| h2–h4 | Tráfico legítimo | 10.0.0.2–4 |
+| h2 | Tráfico legítimo | 10.0.0.2 |
+| h3 | ATráfico legítimo | 10.0.0.3 |
+| h4 | Tráfico legítimo | 10.0.0.4 |
 | h5 | Atacante (SYN Flood) | 10.0.0.11 |
 | h6 | Atacante (UDP Flood) | 10.0.0.12 |
 | h7 | Atacante (ICMP Flood) | 10.0.0.13 |
@@ -358,7 +363,7 @@ Detalle completo en [`results/`](results/) y en [`docs/06-Reproducir-Hito10.md`]
 | 8 | Detección en tiempo real | ✅ |
 | 9 | Identificación del origen y mitigación | ✅ |
 | 10 | Validación experimental integral | ✅ |
-| 11 | Consolidación, documentación y artículo | 🔄 |
+| 11 | Consolidación, documentación y artículo | ✅ |
 
 **Trabajo futuro:**
 - Extensión a escenarios con *IP spoofing*, donde la entropía de origen recuperaría valor discriminante.
@@ -375,17 +380,21 @@ Actualmente este proyecto forma parte de una investigación de maestría. Las co
 
 ## 18. Cómo citar
 
-Si este trabajo resulta útil para tu investigación, puedes citarlo como:
+Si este trabajo es útil para tu investigación, puedes citarlo como:
 
 ```bibtex
-@mastersthesis{capcha_ddos_sdn,
-  author = {Jhon Capcha},
-  title  = {Sistema de detección, identificación del origen y mitigación
-            automática de ataques DDoS en redes SDN mediante Entropía de
-            Shannon y Machine Learning},
-  school = {Universidad Nacional Mayor de San Marcos},
-  year   = {2026},
-  type   = {Tesis de Maestría en Ciberseguridad}
+@misc{ddos_sdn_shannon_2026,
+  title = {Sistema de detección, identificación del origen y mitigación automática de ataques DDoS en redes SDN mediante Entropía de Shannon y Machine Learning},
+  author = {
+    Jhon Kenedy Capcha Salas and
+    Ludwin Ciro Coñes Falcon and
+    Rosembert Gamboa Ventura and
+    Luis Angel Mayta Chipana
+  },
+  year = {2026},
+  institution = {Universidad Nacional Mayor de San Marcos},
+  note = {Proyecto académico desarrollado para la Maestría en Ciberseguridad},
+  url = {https://github.com/jhon-capcha/ddos-sdn}
 }
 ```
 
@@ -398,7 +407,7 @@ Si este trabajo resulta útil para tu investigación, puedes citarlo como:
 - **Universidad Nacional Mayor de San Marcos (UNMSM)**
 - **Maestría en Ciberseguridad**
 - Curso: *Programación Aplicada a la Ciberseguridad* — Prof. Dr. Krishnendu Rarhi
-- Al laboratorio SDN sobre el que se desarrolló y validó esta investigación.
+
 
 ---
 
@@ -408,12 +417,13 @@ Este proyecto se distribuye bajo la licencia **MIT**. Ver el archivo [`LICENSE`]
 
 ---
 
-## 21. Autor
+## 21. Equipo de proyecto
+* Jhon Kenedy Capcha Salas (jhon.capchas@unmsm.edu.pe)
+* Ludwin Ciro Coñes Falcon (ludwig.conesf@unmsm.edu.pe)
+* Rosembert Gamboa Ventura (rosembert.gamboav@unmsm.edu.pe)
+* Luis Angel Mayta Chipana (luis.mayta@unmsm.edu.pe)
 
-**Jhon Capcha**
-Maestría en Ciberseguridad — Universidad Nacional Mayor de San Marcos (UNMSM)
-GitHub: [@jhon-capcha](https://github.com/jhon-capcha)
 
 ---
 
-*Este repositorio constituye el producto integral del proyecto de tesis, incluyendo el código del sistema defensivo, el pipeline de Machine Learning, la instrumentación experimental y la documentación de reproducibilidad.*
+*Proyecto desarrollado como trabajo final del curso Programación Aplicada a la Ciberseguridad, perteneciente a la Maestría en Ciberseguridad de la Universidad Nacional Mayor de San Marcos.*
